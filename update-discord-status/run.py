@@ -149,28 +149,28 @@ async def get_prize_pool(contract, w3, network):
 async def main():
     try:
         # Ethereum bots
-        eth_game_bot = StatusBot(
-            update_func=lambda: get_game_number(eth_contract, "Ethereum"),
-            bot_type="Game",
-            network="Ethereum"
-        )
+        # eth_game_bot = StatusBot(
+        #     update_func=lambda: get_game_number(eth_contract, "Ethereum"),
+        #     bot_type="Game",
+        #     network="Ethereum"
+        # )
         
         eth_prize_bot = StatusBot(
             update_func=lambda: get_prize_pool(eth_contract, eth_w3, "Ethereum"),
-            bot_type="Prize",
+            bot_type="Jackpot",
             network="Ethereum"
         )
 
         # World Chain bots
-        world_game_bot = StatusBot(
-            update_func=lambda: get_game_number(world_contract, "World"),
-            bot_type="Game",
-            network="World"
-        )
+        # world_game_bot = StatusBot(
+        #     update_func=lambda: get_game_number(world_contract, "World"),
+        #     bot_type="Game",
+        #     network="World"
+        # )
         
         world_prize_bot = StatusBot(
             update_func=lambda: get_prize_pool(world_contract, world_w3, "World"),
-            bot_type="Prize",
+            bot_type="Jackpot",
             network="World"
         )
 
