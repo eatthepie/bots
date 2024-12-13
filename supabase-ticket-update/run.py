@@ -119,6 +119,7 @@ async def process_logs() -> None:
                                 'transaction_hash': log['transactionHash'],
                                 'log_index': log_index,
                                 'block_number': int(log['blockNumber'], 16),
+                                'wallet_address': '0x' + log['topics'][1][26:].lower(),  # Extract wallet from topics[1], remove '0x000...' prefix
                                 'number1': num1,
                                 'number2': num2,
                                 'number3': num3,
