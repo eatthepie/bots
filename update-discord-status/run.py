@@ -175,9 +175,9 @@ async def main():
         )
 
         await asyncio.gather(
-            eth_game_bot.start(ETH_GAME_BOT_TOKEN),
+            # eth_game_bot.start(ETH_GAME_BOT_TOKEN),
             eth_prize_bot.start(ETH_PRIZE_BOT_TOKEN),
-            world_game_bot.start(WORLD_GAME_BOT_TOKEN),
+            # world_game_bot.start(WORLD_GAME_BOT_TOKEN),
             world_prize_bot.start(WORLD_PRIZE_BOT_TOKEN)
         )
     except Exception as e:
