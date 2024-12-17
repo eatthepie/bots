@@ -50,11 +50,11 @@ async def get_next_unprocessed_game() -> int:
     """Get the next game number to process."""
     response = supabase.table('rounds') \
         .select('game_number') \
-        .eq('winning_numbers', [0, 0, 0, 0]) \
+        .eq('winning_numbers', '{0,0,0,0}') \
         .order('game_number', desc=True) \
         .limit(1) \
         .execute()
-    
+
     if response.data:
         return response.data[0]['game_number']
     return 1
