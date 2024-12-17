@@ -49,16 +49,14 @@ async def get_detailed_game_info(game_number: int) -> dict:
 async def get_next_unprocessed_game() -> int:
     """Get the next game number to process."""
     response = supabase.table('rounds') \
-        .select('game_number', 'winning_numbers') \
+        .select('game_number') \
+        .eq('winning_numbers', [0, 0, 0, 0]) \
         .order('game_number', desc=True) \
         .limit(1) \
         .execute()
     
     if response.data:
-        last_game = response.data[0]
-        if last_game['winning_numbers'] == [0, 0, 0, 0]:
-            return last_game['game_number']
-        return last_game['game_number'] + 1
+        return response.data[0]['game_number']
     return 1
 
 async def get_ticket_count(game_number: int) -> int:
