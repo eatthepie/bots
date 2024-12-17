@@ -19,6 +19,7 @@ N = 2519590847565789349402718324004839857142928212620403202777713783604366202070
 # Time parameter - affects the delay duration
 # Higher values increase the VDF computation time
 T = 2**26
+# T = 2**20
 
 def pad_hex(x: str) -> str:
     """Ensures hex strings are correctly padded to 64 bytes for Keccak input"""
