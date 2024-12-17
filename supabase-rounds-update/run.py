@@ -49,13 +49,16 @@ async def get_detailed_game_info(game_number: int) -> dict:
 async def get_next_unprocessed_game() -> int:
     """Get the next game number to process."""
     response = supabase.table('rounds') \
-        .select('game_number') \
+        .select('game_number', 'winning_numbers') \
         .order('game_number', desc=True) \
         .limit(1) \
         .execute()
     
     if response.data:
-        return response.data[0]['game_number'] + 1
+        last_game = response.data[0]
+        if last_game['winning_numbers'] == [0, 0, 0, 0]:
+            return last_game['game_number']
+        return last_game['game_number'] + 1
     return 1
 
 async def get_ticket_count(game_number: int) -> int:
@@ -89,6 +92,27 @@ async def update_or_insert_round(game_number: int, game_info: dict, total_ticket
     
     supabase.table('rounds').upsert(round_data).execute()
 
+async def update_ticket_winners(game_number: int, winning_numbers: list) -> None:
+    """Update tickets to identify winners."""
+    # Fetch tickets for the current game where the first two numbers match the winning numbers
+    response = supabase.table('tickets') \
+        .select('id', 'number1', 'number2', 'number3', 'number4') \
+        .eq('game_number', game_number) \
+        .eq('number1', winning_numbers[0]) \
+        .eq('number2', winning_numbers[1]) \
+        .execute()
+    
+    if response.data:
+        for ticket in response.data:
+            # Consider a ticket a winner if the first two numbers match
+            is_winner = True
+            
+            # Update the ticket with winner status and mark as processed
+            supabase.table('tickets').update({
+                'is_winner': is_winner,
+                'is_processed': True
+            }).eq('id', ticket['id']).execute()
+
 async def process_games():
     """Main function to process games."""
     try:
@@ -100,6 +124,9 @@ async def process_games():
             # Get current game info
             game_info = await get_detailed_game_info(game_number)
             total_tickets = await get_ticket_count(game_number)
+            
+            # Update tickets to identify winners
+            await update_ticket_winners(game_number, game_info['winningNumbers'])
             
             # Check if game is completed (has tickets for next game)
             completed = await has_next_game_tickets(game_number)
