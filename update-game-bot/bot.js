@@ -262,10 +262,10 @@ if (specificGameNumber !== null) {
   // If a specific game number is provided, run once for that game
   console.log(`Processing specific game number: ${specificGameNumber}`);
   // checkAndProcessGame(specificGameNumber);
-  setInterval(() => checkAndProcessGame(specificGameNumber), 60000);
+  setInterval(() => checkAndProcessGame(specificGameNumber), 60000 * 10);
 } else {
   // Run every minute for current game
-  setInterval(checkAndProcessGame, 60000);
+  setInterval(checkAndProcessGame, 60000 * 10);
   console.log("Bot started in continuous mode...");
 }
 
