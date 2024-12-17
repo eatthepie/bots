@@ -208,43 +208,76 @@ async function checkAndProcessGame(specificGameNumber = null) {
         );
       }
     } else if (gameInfo.status === 1 && gameInfo.randaoValue !== BigInt(0)) {
-      console.log("\n🔢 Generating VDF proof...");
-      await execAsync(`python3 prover.py ${gameInfo.randaoValue}`);
-      console.log("✅ VDF proof generated");
+      // Check if we're already processing
+      try {
+        await fs.access("./vdf-processing.json");
+        console.log("VDF proof generation in progress...");
+        return;
+      } catch {} // File doesn't exist, continue
 
-      const proofData = JSON.parse(await fs.readFile("./proof.json", "utf8"));
-      const { v, y } = prepareProofData(proofData);
+      // Check if proof is complete
+      let proofExists = false;
+      let completeExists = false;
 
       try {
-        console.log("\n📤 Submitting proof to blockchain...");
-        const hash = await submitVDFProof(
-          walletClient,
-          publicClient,
-          config.CONTRACT_ADDRESS,
-          gameNumber,
-          v,
-          y
-        );
-        console.log("✅ Proof submitted successfully!");
-        console.log("📜 Transaction:", hash);
-      } catch (error) {
-        console.error("❌ Error submitting proof:", error);
+        await fs.access("./proof.json");
+        proofExists = true;
+      } catch {}
+
+      try {
+        await fs.access("./vdf-complete.json");
+        completeExists = true;
+      } catch {}
+
+      if (proofExists && completeExists) {
+        console.log("Proof generation complete, submitting...");
+        try {
+          const proofData = JSON.parse(
+            await fs.readFile("./proof.json", "utf8")
+          );
+          const { v, y } = prepareProofData(proofData);
+
+          // Submit proof and calculate payouts
+          await submitVDFProof(
+            walletClient,
+            publicClient,
+            config.CONTRACT_ADDRESS,
+            gameNumber,
+            v,
+            y
+          );
+
+          await setTimeout(10000);
+
+          await calculatePayouts(
+            walletClient,
+            publicClient,
+            config.CONTRACT_ADDRESS,
+            gameNumber
+          );
+
+          // Clean up - don't wait for these
+          fs.unlink("./vdf-complete.json").catch(() => {});
+          fs.unlink("./proof.json").catch(() => {});
+        } catch (error) {
+          console.error("Error handling proof:", error);
+        }
+        return;
       }
 
-      await setTimeout(5000);
-
-      console.log("\n💰 Calculating payouts...");
-      const hashPayout = await calculatePayouts(
-        walletClient,
-        publicClient,
-        config.CONTRACT_ADDRESS,
-        gameNumber
-      );
-      console.log("✅ Payouts calculated successfully!");
-      console.log("📜 Transaction:", hashPayout);
-
-      // Stop the program after successful payout calculation
-      process.exit(0);
+      // If no proof is being generated or complete, start new one
+      try {
+        console.log("Requesting new VDF proof generation...");
+        await fs.writeFile(
+          "./vdf-needed.json",
+          JSON.stringify({
+            gameNumber: gameNumber.toString(),
+            randaoValue: gameInfo.randaoValue.toString(),
+          })
+        );
+      } catch (error) {
+        console.error("Error creating vdf-needed.json:", error);
+      }
     } else if (gameInfo.status === 2) {
       console.log("🎲 Game is completed. Exiting...");
       process.exit(0);
@@ -262,10 +295,10 @@ if (specificGameNumber !== null) {
   // If a specific game number is provided, run once for that game
   console.log(`Processing specific game number: ${specificGameNumber}`);
   // checkAndProcessGame(specificGameNumber);
-  setInterval(() => checkAndProcessGame(specificGameNumber), 60000 * 10);
+  setInterval(() => checkAndProcessGame(specificGameNumber), 60000 * 5);
 } else {
   // Run every minute for current game
-  setInterval(checkAndProcessGame, 60000 * 10);
+  setInterval(checkAndProcessGame, 60000 * 5);
   console.log("Bot started in continuous mode...");
 }
 
