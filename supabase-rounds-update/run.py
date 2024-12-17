@@ -51,7 +51,7 @@ async def get_next_unprocessed_game() -> int:
     response = supabase.table('rounds') \
         .select('game_number') \
         .eq('winning_numbers', '{0,0,0,0}') \
-        .order('game_number', desc=True) \
+        .order('game_number', desc=False) \
         .limit(1) \
         .execute()
 
