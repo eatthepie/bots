@@ -114,9 +114,17 @@ async def update_ticket_winners(game_number: int, winning_numbers: list) -> None
 async def process_games():
     """Main function to process games."""
     try:
+        reset_interval = 3600 * 2  # Reset every 2 hours (3600 seconds)
+        last_reset_time = datetime.utcnow().timestamp()
+        
         game_number = await get_next_unprocessed_game()
         
         while True:
+            current_time = datetime.utcnow().timestamp()
+            if current_time - last_reset_time >= reset_interval:
+                game_number = await get_next_unprocessed_game()
+                last_reset_time = current_time
+            
             print(f"Processing game {game_number}")
             
             # Get current game info
