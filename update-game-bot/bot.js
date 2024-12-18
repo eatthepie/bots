@@ -115,6 +115,7 @@ async function submitVDFProof(
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     return receipt.transactionHash;
   } catch (error) {
+    console.log("Error submitting VDF proof:", error);
     throw new Error(`Failed to submit VDF proof: ${error.message}`);
   }
 }
@@ -247,7 +248,7 @@ async function checkAndProcessGame(specificGameNumber = null) {
             y
           );
 
-          await setTimeout(10000);
+          await setTimeout(5000); // Wait for 5 seconds
 
           await calculatePayouts(
             walletClient,
@@ -295,10 +296,10 @@ if (specificGameNumber !== null) {
   // If a specific game number is provided, run once for that game
   console.log(`Processing specific game number: ${specificGameNumber}`);
   // checkAndProcessGame(specificGameNumber);
-  setInterval(() => checkAndProcessGame(specificGameNumber), 60000 * 5);
+  setInterval(() => checkAndProcessGame(specificGameNumber), 60000 * 1);
 } else {
   // Run every minute for current game
-  setInterval(checkAndProcessGame, 60000 * 5);
+  setInterval(checkAndProcessGame, 60000 * 1);
   console.log("Bot started in continuous mode...");
 }
 
