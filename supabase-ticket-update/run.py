@@ -6,6 +6,7 @@ import aiohttp
 from datetime import datetime
 from dotenv import load_dotenv
 from supabase import create_client, Client
+from typing import Optional, Tuple
 
 # Load environment variables
 load_dotenv()
@@ -91,7 +92,7 @@ def update_last_processed_block(block_number: int) -> None:
         'last_block': block_number
     }).execute()
 
-async def fetch_worldcoin_data(session: aiohttp.ClientSession, wallet_address: str) -> tuple[str | None, str | None]:
+async def fetch_worldcoin_data(session: aiohttp.ClientSession, wallet_address: str) -> Tuple[Optional[str], Optional[str]]:
     """Fetch username and profile picture from Worldcoin API."""
     try:
         url = f"https://usernames.worldcoin.org/api/v1/{wallet_address}"
