@@ -91,6 +91,18 @@ def update_last_processed_block(block_number: int) -> None:
         'last_block': block_number
     }).execute()
 
+async def fetch_worldcoin_data(session: aiohttp.ClientSession, wallet_address: str) -> tuple[str | None, str | None]:
+    """Fetch username and profile picture from Worldcoin API."""
+    try:
+        url = f"https://usernames.worldcoin.org/api/v1/{wallet_address}"
+        async with session.get(url) as response:
+            if response.status == 200:
+                data = await response.json()
+                return data.get('username'), data.get('profile_picture_url')
+    except Exception as e:
+        print(f"Error fetching Worldcoin data for {wallet_address}: {str(e)}")
+    return None, None
+
 async def process_logs() -> None:
     """Main function to process logs in batches."""
     try:
@@ -113,13 +125,17 @@ async def process_logs() -> None:
                             num1, num2, num3, etherball, game_number = decode_ticket_numbers(log)
                             log_index = int(log['logIndex'], 16)
                             event_signature = create_event_signature(log['transactionHash'], log_index)
-                            
+                            wallet_address = '0x' + log['topics'][1][26:].lower()
+                            username, profile_pic = await fetch_worldcoin_data(session, wallet_address)
+
                             tickets.append({
                                 'event_signature': event_signature,
                                 'transaction_hash': log['transactionHash'],
                                 'log_index': log_index,
                                 'block_number': int(log['blockNumber'], 16),
-                                'wallet_address': '0x' + log['topics'][1][26:].lower(),  # Extract wallet from topics[1], remove '0x000...' prefix
+                                'wallet_address': wallet_address,
+                                'username': username,
+                                'profile_pic': profile_pic,
                                 'number1': num1,
                                 'number2': num2,
                                 'number3': num3,
