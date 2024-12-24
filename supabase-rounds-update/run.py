@@ -41,9 +41,8 @@ async def get_detailed_game_info(game_number: int) -> dict:
         'winningNumbers': result[7],
         'difficulty': result[8],
         'drawInitiatedBlock': result[9],
-        'randaoBlock': result[10],
-        'randaoValue': result[11],
-        'payouts': result[12]
+        'randomValue': result[10],
+        'payouts': result[11]
     }
 
 async def get_next_unprocessed_game() -> int:
