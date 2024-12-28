@@ -53,8 +53,7 @@ async function getDetailedGameInfo(publicClient, contractAddress, gameNumber) {
     winningNumbers: result.winningNumbers,
     difficulty: result.difficulty,
     drawInitiatedBlock: result.drawInitiatedBlock,
-    randaoBlock: result.randaoBlock,
-    randaoValue: result.randaoValue,
+    randomValue: result.randomSeed,
     payouts: result.payouts,
   };
 }
@@ -74,7 +73,7 @@ async function initiateDraw(walletClient, publicClient, contractAddress) {
   }
 }
 
-async function setRandao(
+async function completeDraw(
   walletClient,
   publicClient,
   contractAddress,
@@ -84,39 +83,14 @@ async function setRandao(
     const { request } = await publicClient.simulateContract({
       address: contractAddress,
       abi: abi,
-      functionName: "setRandom",
+      functionName: "setRandomAndWinningNumbers",
       args: [BigInt(gameNumber)],
     });
 
     const hash = await walletClient.writeContract(request);
     return hash;
   } catch (error) {
-    throw new Error(`Failed to set RANDAO value: ${error.message}`);
-  }
-}
-
-async function submitVDFProof(
-  walletClient,
-  publicClient,
-  contractAddress,
-  gameNumber,
-  v,
-  y
-) {
-  try {
-    const { request } = await publicClient.simulateContract({
-      address: contractAddress,
-      abi: abi,
-      functionName: "submitVDFProof",
-      args: [BigInt(gameNumber), v, y],
-    });
-
-    const hash = await walletClient.writeContract(request);
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    return receipt.transactionHash;
-  } catch (error) {
-    console.log("Error submitting VDF proof:", error);
-    throw new Error(`Failed to submit VDF proof: ${error.message}`);
+    throw new Error(`Failed to complete draw: ${error.message}`);
   }
 }
 
@@ -175,7 +149,7 @@ async function checkAndProcessGame(specificGameNumber = null) {
         silver: gameInfo.silverWinners.toString(),
         bronze: gameInfo.bronzeWinners.toString(),
       },
-      randaoValue: gameInfo.randaoValue.toString(),
+      randomValue: gameInfo.randomValue.toString(),
     });
 
     // Process based on game state
@@ -188,97 +162,27 @@ async function checkAndProcessGame(specificGameNumber = null) {
       );
       console.log("✅ Draw initiated successfully!");
       console.log("📜 Transaction:", hash);
-    } else if (gameInfo.status === 1 && gameInfo.randaoValue === BigInt(0)) {
-      const currentBlock = await publicClient.getBlockNumber();
-      const blocksRemaining =
-        gameInfo.drawInitiatedBlock + BigInt(5) - currentBlock;
+    } else if (gameInfo.status === 1 && gameInfo.randomValue === BigInt(0)) {
+      console.log("\n🎲 Completing Draw...");
+      const hash = await completeDraw(
+        walletClient,
+        publicClient,
+        config.CONTRACT_ADDRESS,
+        gameNumber
+      );
+      console.log("✅ Draw completed successfully!");
+      console.log("📜 Transaction:", hash);
+    } else if (gameInfo.status === 1 && gameInfo.randomValue !== BigInt(0)) {
+      console.log("\n🎲 Calculating Payouts...");
 
-      if (currentBlock >= gameInfo.drawInitiatedBlock + BigInt(5)) {
-        console.log("\n🎲 Setting RANDAO value...");
-        const hash = await setRandao(
-          walletClient,
-          publicClient,
-          config.CONTRACT_ADDRESS,
-          gameNumber
-        );
-        console.log("✅ RANDAO value set successfully!");
-        console.log("📜 Transaction:", hash);
-      } else {
-        console.log(
-          `\n⏳ Waiting for buffer period... ${blocksRemaining} blocks remaining`
-        );
-      }
-    } else if (gameInfo.status === 1 && gameInfo.randaoValue !== BigInt(0)) {
-      // Check if we're already processing
-      try {
-        await fs.access("./vdf-processing.json");
-        console.log("VDF proof generation in progress...");
-        return;
-      } catch {} // File doesn't exist, continue
-
-      // Check if proof is complete
-      let proofExists = false;
-      let completeExists = false;
-
-      try {
-        await fs.access("./proof.json");
-        proofExists = true;
-      } catch {}
-
-      try {
-        await fs.access("./vdf-complete.json");
-        completeExists = true;
-      } catch {}
-
-      if (proofExists && completeExists) {
-        console.log("Proof generation complete, submitting...");
-        try {
-          const proofData = JSON.parse(
-            await fs.readFile("./proof.json", "utf8")
-          );
-          const { v, y } = prepareProofData(proofData);
-
-          // Submit proof and calculate payouts
-          await submitVDFProof(
-            walletClient,
-            publicClient,
-            config.CONTRACT_ADDRESS,
-            gameNumber,
-            v,
-            y
-          );
-
-          await setTimeout(5000); // Wait for 5 seconds
-
-          await calculatePayouts(
-            walletClient,
-            publicClient,
-            config.CONTRACT_ADDRESS,
-            gameNumber
-          );
-
-          // Clean up - don't wait for these
-          fs.unlink("./vdf-complete.json").catch(() => {});
-          fs.unlink("./proof.json").catch(() => {});
-        } catch (error) {
-          console.error("Error handling proof:", error);
-        }
-        return;
-      }
-
-      // If no proof is being generated or complete, start new one
-      try {
-        console.log("Requesting new VDF proof generation...");
-        await fs.writeFile(
-          "./vdf-needed.json",
-          JSON.stringify({
-            gameNumber: gameNumber.toString(),
-            randaoValue: gameInfo.randaoValue.toString(),
-          })
-        );
-      } catch (error) {
-        console.error("Error creating vdf-needed.json:", error);
-      }
+      const hash = await calculatePayouts(
+        walletClient,
+        publicClient,
+        config.CONTRACT_ADDRESS,
+        gameNumber
+      );
+      console.log("✅ Payouts calculated successfully!");
+      console.log("📜 Transaction:", hash);
     } else if (gameInfo.status === 2) {
       console.log("🎲 Game is completed. Exiting...");
       process.exit(0);
@@ -296,10 +200,10 @@ if (specificGameNumber !== null) {
   // If a specific game number is provided, run once for that game
   console.log(`Processing specific game number: ${specificGameNumber}`);
   // checkAndProcessGame(specificGameNumber);
-  setInterval(() => checkAndProcessGame(specificGameNumber), 60000 * 1);
+  setInterval(() => checkAndProcessGame(specificGameNumber), 60000 * 15);
 } else {
   // Run every minute for current game
-  setInterval(checkAndProcessGame, 60000 * 1);
+  setInterval(checkAndProcessGame, 60000 * 15);
   console.log("Bot started in continuous mode...");
 }
 
