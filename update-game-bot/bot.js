@@ -1,8 +1,9 @@
-import { createPublicClient, createWalletClient, http } from "viem";
+import { createPublicClient, createWalletClient, http, parseEther } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { worldchain } from "viem/chains";
 import { setTimeout } from "timers/promises";
 import dotenv from "dotenv";
+import { createRequire } from "module";
 
 // Load environment variables
 dotenv.config();
@@ -19,7 +20,7 @@ const config = {
   CONTRACT_ADDRESS: process.env.CONTRACT_ADDRESS,
   // You can tweak these if you'd like to attempt multiple small amounts
   // for Witnet calls. We'll try them in ascending order if the TX reverts.
-  WITNET_FUNDING_ATTEMPTS: [0.000001, 0.000005, 0.00001],
+  WITNET_FUNDING_ATTEMPTS: [0.000001, 0.0000005, 0.000005],
 };
 
 // ---------------------------------------------------
@@ -77,18 +78,13 @@ async function initiateDraw() {
       console.log(
         `Attempting initiateDraw with value = ${attemptValue} ETH...`
       );
-      const { request } = await publicClient.simulateContract({
-        address: config.CONTRACT_ADDRESS,
-        abi,
-        functionName: "initiateDraw",
-        // We simulate with value — so we pass overrides:
-        value: BigInt(Math.floor(attemptValue * 1e18)),
-      });
 
       // Actually send transaction with `value`
       const hash = await walletClient.writeContract({
-        ...request,
-        value: BigInt(Math.floor(attemptValue * 1e18)),
+        address: config.CONTRACT_ADDRESS,
+        abi,
+        functionName: "initiateDraw",
+        value: parseEther(attemptValue.toString()),
       });
       console.log(`✅ initiateDraw success! TX Hash: ${hash}`);
       return hash;
@@ -162,19 +158,11 @@ async function calculatePayouts(gameNumber) {
 }
 
 // ---------------------------------------------------
-// Main Flow: Check Current Game & Move It Forward
+// Main Flow: Check Specific Game & Move It Forward
 // ---------------------------------------------------
-async function checkGameFlow() {
+async function checkGameFlow(gameNum) {
   try {
-    // 1) Retrieve currentGameNumber
-    const currentGameNumber = await publicClient.readContract({
-      address: config.CONTRACT_ADDRESS,
-      abi,
-      functionName: "currentGameNumber",
-    });
-    const gameNum = currentGameNumber.toString();
-
-    // 2) Retrieve the detailed info for that game
+    // Retrieve the detailed info for the specified game
     const info = await getDetailedGameInfo(gameNum);
 
     // The contract's `GameStatus`:
@@ -212,6 +200,7 @@ async function checkGameFlow() {
     // If Completed => do nothing
     else if (status === 2) {
       console.log("Game is Completed. Nothing to do.");
+      process.exit(0);
     }
   } catch (err) {
     console.error(`❌ Error: ${err.message}`);
@@ -222,18 +211,26 @@ async function checkGameFlow() {
 // Scheduling / Interval
 // ---------------------------------------------------
 
-// 1) Parse command line argument for interval (in minutes). Default = 30
-const argInterval = parseInt(process.argv[2], 10);
-const intervalMinutes = isNaN(argInterval) ? 30 : argInterval;
+// Parse command line arguments
+// First arg (process.argv[2]) is the game number
+// Second arg (process.argv[3]) is the interval in minutes (optional)
+const gameNumber = parseInt(process.argv[2], 10);
+if (isNaN(gameNumber)) {
+  console.error("Please provide a valid game number as the first argument");
+  process.exit(1);
+}
+
+const argInterval = parseInt(process.argv[3], 10);
+const intervalMinutes = isNaN(argInterval) ? 1 : argInterval;
 const intervalMs = intervalMinutes * 60_000;
 
 console.log(
-  `\nLottery Bot started. Checking every ${intervalMinutes} minute(s)...`
+  `\nLottery Bot started. Checking game #${gameNumber} every ${intervalMinutes} minute(s)...`
 );
 
 async function mainLoop() {
   while (true) {
-    await checkGameFlow();
+    await checkGameFlow(gameNumber);
     // Wait the specified interval before checking again
     console.log(`Sleeping for ${intervalMinutes} minute(s)...`);
     await setTimeout(intervalMs);

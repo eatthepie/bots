@@ -14,7 +14,7 @@ CONTRACT_ADDRESS = Web3.to_checksum_address(os.getenv('CONTRACT_ADDRESS'))
 RPC_URL = os.getenv('RPC_URL')
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
-CHECK_INTERVAL = 60  # 1 minute
+CHECK_INTERVAL = 60 * 5  # 5 minutes
 
 # Initialize clients
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
