@@ -18,7 +18,7 @@ RPC_URL = os.getenv('RPC_URL')
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 SYNC_INTERVAL = 15 * 60  # 15 minutes in seconds
-BATCH_SIZE = 2000
+BATCH_SIZE = 10  # RPC provider free tier limit
 
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -159,7 +159,56 @@ async def process_logs() -> None:
                     
                 except Exception as e:
                     print(f"Error processing batch {from_block}-{to_block}: {str(e)}")
-                    continue
+                    # If it's an RPC limit error, try smaller batches
+                    if "block range" in str(e) and "10 block range" in str(e):
+                        print(f"RPC limit hit, trying smaller batch from {from_block}")
+                        # Try processing just 1 block at a time
+                        for single_block in range(from_block, min(from_block + 10, to_block + 1)):
+                            try:
+                                logs = await fetch_logs(session, single_block, single_block)
+                                if logs:
+                                    # Process logs for this single block
+                                    tickets = []
+                                    for log in logs:
+                                        num1, num2, num3, etherball, game_number = decode_ticket_numbers(log)
+                                        log_index = int(log['logIndex'], 16)
+                                        event_signature = create_event_signature(log['transactionHash'], log_index)
+                                        wallet_address = '0x' + log['topics'][1][26:].lower()
+                                        username, profile_pic = await fetch_worldcoin_data(session, wallet_address)
+
+                                        tickets.append({
+                                            'event_signature': event_signature,
+                                            'transaction_hash': log['transactionHash'],
+                                            'log_index': log_index,
+                                            'block_number': int(log['blockNumber'], 16),
+                                            'wallet_address': wallet_address,
+                                            'username': username,
+                                            'profile_pic': profile_pic,
+                                            'number1': num1,
+                                            'number2': num2,
+                                            'number3': num3,
+                                            'number4': etherball,
+                                            'game_number': game_number,
+                                            'is_winner': False,
+                                            'is_processed': False,
+                                            'created_at': datetime.utcnow().isoformat()
+                                        })
+                                    
+                                    if tickets:
+                                        supabase.table('tickets').upsert(
+                                            tickets,
+                                            on_conflict='event_signature'
+                                        ).execute()
+                                        print(f"Processed {len(tickets)} tickets from block {single_block}")
+                                
+                                update_last_processed_block(single_block)
+                                await asyncio.sleep(0.1)  # Small delay to avoid rate limiting
+                                
+                            except Exception as single_e:
+                                print(f"Error processing single block {single_block}: {str(single_e)}")
+                                continue
+                    else:
+                        continue
                 
     except Exception as e:
         print(f"Error in process_logs: {str(e)}")
