@@ -1,9 +1,10 @@
-import { createPublicClient, createWalletClient, http, parseEther } from "viem";
+import { createPublicClient, createWalletClient, http, parseEther, formatEther } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { worldchain } from "viem/chains";
 import { setTimeout } from "timers/promises";
 import dotenv from "dotenv";
 import { createRequire } from "module";
+import https from "https";
 
 // Load environment variables
 dotenv.config();
@@ -15,12 +16,25 @@ const abi = require("./abi.json");
 // Configuration
 // ---------------------------------------------------
 const config = {
-  RPC_URL: process.env.RPC_URL, // e.g. "https://rpc.worldchain.io"
-  PRIVATE_KEY: process.env.PRIVATE_KEY, // A private key with funds on Worldchain
+  RPC_URL: process.env.RPC_URL,
+  PRIVATE_KEY: process.env.PRIVATE_KEY,
   CONTRACT_ADDRESS: process.env.CONTRACT_ADDRESS,
-  // You can tweak these if you'd like to attempt multiple small amounts
-  // for Witnet calls. We'll try them in ascending order if the TX reverts.
   WITNET_FUNDING_ATTEMPTS: [0.000001, 0.0000005, 0.000005],
+  // Social media Lambda config
+  ROUND_COMPLETE_LAMBDA_URL: process.env.ROUND_COMPLETE_LAMBDA_URL,
+  LAMBDA_PASSWORD: process.env.LAMBDA_PASSWORD,
+};
+
+// ---------------------------------------------------
+// Interval Settings (in minutes)
+// ---------------------------------------------------
+const INTERVALS = {
+  FAR_FROM_DRAW: 60,        // 1 hour when > 12 hours from draw
+  APPROACHING_DRAW: 30,     // 30 mins when 2-12 hours from draw
+  CLOSE_TO_DRAW: 10,        // 10 mins when 30min-2hr from draw
+  VERY_CLOSE: 2,            // 2 mins when < 30 mins from draw
+  DRAWING_IN_PROGRESS: 1,   // 1 min when drawing/completing
+  WAITING_FOR_RANDOM: 5,    // 5 mins when waiting for Witnet random
 };
 
 // ---------------------------------------------------
@@ -39,6 +53,25 @@ const walletClient = createWalletClient({
 });
 
 // ---------------------------------------------------
+// Helper: Get Current Game Info
+// ---------------------------------------------------
+async function getCurrentGameInfo() {
+  const result = await publicClient.readContract({
+    address: config.CONTRACT_ADDRESS,
+    abi,
+    functionName: "getCurrentGameInfo",
+  });
+
+  return {
+    gameNumber: Number(result[0]),
+    difficulty: Number(result[1]),
+    prizePool: formatEther(result[2]),
+    drawTime: Number(result[3]),
+    timeUntilDraw: Number(result[4]),
+  };
+}
+
+// ---------------------------------------------------
 // Helper: Get Detailed Game Info
 // ---------------------------------------------------
 async function getDetailedGameInfo(gameNumber) {
@@ -49,10 +82,9 @@ async function getDetailedGameInfo(gameNumber) {
     args: [BigInt(gameNumber)],
   });
 
-  // The contract returns a struct with many fields; map them neatly:
   return {
-    gameId: result.gameId,
-    status: result.status, // 0 => InPlay, 1 => Drawing, 2 => Completed
+    gameId: Number(result.gameId),
+    status: Number(result.status), // 0 => InPlay, 1 => Drawing, 2 => Completed
     prizePool: result.prizePool,
     numberOfWinners: result.numberOfWinners,
     goldWinners: result.goldWinners,
@@ -70,33 +102,23 @@ async function getDetailedGameInfo(gameNumber) {
 // Step 1: Initiate Draw
 // ---------------------------------------------------
 async function initiateDraw() {
-  // We need to send some ETH for Witnet's randomness request.
-  // We'll attempt multiple small amounts in ascending order.
   for (let i = 0; i < config.WITNET_FUNDING_ATTEMPTS.length; i++) {
     const attemptValue = config.WITNET_FUNDING_ATTEMPTS[i];
     try {
-      console.log(
-        `Attempting initiateDraw with value = ${attemptValue} ETH...`
-      );
-
-      // Actually send transaction with `value`
+      console.log(`Attempting initiateDraw with value = ${attemptValue} ETH...`);
+      const ethValue = attemptValue.toFixed(18);
       const hash = await walletClient.writeContract({
         address: config.CONTRACT_ADDRESS,
         abi,
         functionName: "initiateDraw",
-        value: parseEther(attemptValue.toString()),
+        value: parseEther(ethValue),
       });
       console.log(`✅ initiateDraw success! TX Hash: ${hash}`);
       return hash;
     } catch (error) {
-      // If we detect a revert about insufficient funds for Witnet,
-      // we try the next higher amount. Otherwise, throw it.
       const errorMsg = error?.cause?.reason || error.message;
-      console.warn(
-        `initiateDraw attempt with ${attemptValue} ETH failed: ${errorMsg}`
-      );
+      console.warn(`initiateDraw attempt with ${attemptValue} ETH failed: ${errorMsg}`);
 
-      // If the error is something else (like "Time interval not passed"), rethrow:
       if (
         !errorMsg.toLowerCase().includes("value not enough") &&
         !errorMsg.toLowerCase().includes("insufficient") &&
@@ -106,9 +128,7 @@ async function initiateDraw() {
       }
     }
   }
-  throw new Error(
-    "All attempts to fund Witnet randomness have failed. Increase WITNET_FUNDING_ATTEMPTS or check contract conditions."
-  );
+  throw new Error("All attempts to fund Witnet randomness have failed.");
 }
 
 // ---------------------------------------------------
@@ -145,12 +165,11 @@ async function calculatePayouts(gameNumber) {
     console.log(`✅ calculatePayouts success! TX Hash: ${hash}`);
     return hash;
   } catch (error) {
-    // Possibly "Payouts already calculated for this game"
     if (
-      error.message.includes("Payouts already calculated for this game") ||
-      error?.cause?.reason?.includes("Payouts already calculated for this game")
+      error.message.includes("Payouts already calculated") ||
+      error?.cause?.reason?.includes("Payouts already calculated")
     ) {
-      console.log("Payouts have already been calculated. Nothing to do here.");
+      console.log("Payouts already calculated.");
       return null;
     }
     throw new Error(`Failed to calculate payouts: ${error.message}`);
@@ -158,86 +177,223 @@ async function calculatePayouts(gameNumber) {
 }
 
 // ---------------------------------------------------
-// Main Flow: Check Specific Game & Move It Forward
+// Step 4: Notify Social Media
 // ---------------------------------------------------
-async function checkGameFlow(gameNum) {
-  try {
-    // Retrieve the detailed info for the specified game
-    const info = await getDetailedGameInfo(gameNum);
+async function notifyRoundComplete(gameNumber) {
+  if (!config.ROUND_COMPLETE_LAMBDA_URL || !config.LAMBDA_PASSWORD) {
+    console.log("⚠️  Social media notifications not configured");
+    return;
+  }
 
-    // The contract's `GameStatus`:
-    // enum GameStatus { InPlay, Drawing, Completed }
-    // 0 => InPlay, 1 => Drawing, 2 => Completed
-    const status = Number(info.status);
-    console.log(`\n--- Checking Game #${gameNum} ---`);
-    console.log(
-      `Status: ${["InPlay", "Drawing", "Completed"][status]}. RandomValue: ${
-        info.randomValue
-      }`
-    );
+  return new Promise((resolve, reject) => {
+    const url = new URL(config.ROUND_COMPLETE_LAMBDA_URL);
+    const body = JSON.stringify({
+      roundNumber: gameNumber,
+      password: config.LAMBDA_PASSWORD,
+    });
 
-    // If InPlay => try to initiate draw
-    if (status === 0) {
-      // Contract requires that the minimum time (4 days) has passed.
-      // If it's not, the TX will revert with "Time interval not passed."
-      console.log("Game is InPlay. Attempting to initiate draw...");
-      await initiateDraw();
+    const options = {
+      hostname: url.hostname,
+      path: url.pathname,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body),
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", (chunk) => (data += chunk));
+      res.on("end", () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          console.log(`✅ Social media notification sent for round ${gameNumber}`);
+          resolve(data);
+        } else {
+          console.error(`❌ Social media notification failed: ${res.statusCode}`);
+          reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+        }
+      });
+    });
+
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+// ---------------------------------------------------
+// Calculate Smart Interval Based on Game State
+// ---------------------------------------------------
+function calculateInterval(status, timeUntilDraw, randomValue) {
+  // If drawing in progress
+  if (status === 1) {
+    // Waiting for Witnet random
+    if (randomValue === 0n) {
+      return INTERVALS.WAITING_FOR_RANDOM;
     }
-    // If Drawing => we check randomValue
-    else if (status === 1) {
-      // If randomValue is 0 => we still need to call setRandomAndWinningNumbers
-      if (info.randomValue === 0n) {
-        console.log(
-          "Game is Drawing. Random not set. Calling setRandomAndWinningNumbers..."
-        );
-        await setRandomAndWinningNumbers(gameNum);
+    // Random received, ready to calculate payouts
+    return INTERVALS.DRAWING_IN_PROGRESS;
+  }
+
+  // If in play, base interval on time until draw
+  if (status === 0) {
+    const hoursUntilDraw = timeUntilDraw / 3600;
+
+    if (hoursUntilDraw > 12) {
+      return INTERVALS.FAR_FROM_DRAW;
+    } else if (hoursUntilDraw > 2) {
+      return INTERVALS.APPROACHING_DRAW;
+    } else if (hoursUntilDraw > 0.5) {
+      return INTERVALS.CLOSE_TO_DRAW;
+    } else {
+      return INTERVALS.VERY_CLOSE;
+    }
+  }
+
+  // Default
+  return INTERVALS.FAR_FROM_DRAW;
+}
+
+// ---------------------------------------------------
+// Format time for logging
+// ---------------------------------------------------
+function formatTime(seconds) {
+  if (seconds <= 0) return "0s";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+
+  let parts = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (mins > 0) parts.push(`${mins}m`);
+  return parts.join(" ") || "< 1m";
+}
+
+// ---------------------------------------------------
+// Track notified games to avoid duplicate notifications
+// ---------------------------------------------------
+const notifiedGames = new Set();
+
+// ---------------------------------------------------
+// Main Flow: Autonomous Game Management
+// ---------------------------------------------------
+async function checkAndProcessGame() {
+  try {
+    // Get current game info
+    const currentInfo = await getCurrentGameInfo();
+    const gameNum = currentInfo.gameNumber;
+
+    // Get detailed info for current game
+    const info = await getDetailedGameInfo(gameNum);
+    const status = info.status;
+    const statusName = ["InPlay", "Drawing", "Completed"][status];
+
+    console.log(`\n${"=".repeat(50)}`);
+    console.log(`📊 Game #${gameNum} | Status: ${statusName}`);
+    console.log(`💰 Prize Pool: ${currentInfo.prizePool} WLD`);
+
+    if (status === 0) {
+      console.log(`⏳ Time until draw: ${formatTime(currentInfo.timeUntilDraw)}`);
+    }
+
+    // Handle based on status
+    if (status === 0) {
+      // InPlay - check if draw time has passed
+      if (currentInfo.timeUntilDraw <= 0) {
+        console.log("⏰ Draw time reached! Initiating draw...");
+        await initiateDraw();
+        return INTERVALS.DRAWING_IN_PROGRESS;
       } else {
-        // If randomValue != 0 => we can proceed to calculatePayouts
-        console.log("Random is set. Calculating payouts...");
-        await calculatePayouts(gameNum);
+        console.log("⏳ Waiting for draw time...");
       }
     }
-    // If Completed => do nothing
-    else if (status === 2) {
-      console.log("Game is Completed. Nothing to do.");
-      process.exit(0);
+    else if (status === 1) {
+      // Drawing
+      if (info.randomValue === 0n) {
+        console.log("🎲 Waiting for Witnet random number...");
+        try {
+          await setRandomAndWinningNumbers(gameNum);
+        } catch (err) {
+          if (err.message.includes("Random number not yet available")) {
+            console.log("   Random not ready yet, will retry...");
+          } else {
+            throw err;
+          }
+        }
+        return INTERVALS.WAITING_FOR_RANDOM;
+      } else {
+        console.log("🎯 Random received! Calculating payouts...");
+        await calculatePayouts(gameNum);
+        return INTERVALS.DRAWING_IN_PROGRESS;
+      }
     }
+    else if (status === 2) {
+      // Completed - notify social media (only once per game)
+      if (!notifiedGames.has(gameNum)) {
+        console.log("✅ Game completed! Sending social media notification...");
+        await setTimeout(3000);
+        try {
+          await notifyRoundComplete(gameNum);
+          notifiedGames.add(gameNum);
+        } catch (err) {
+          console.error(`Failed to notify: ${err.message}`);
+        }
+      }
+
+      // Check if next game has started
+      const nextGameInfo = await getCurrentGameInfo();
+      if (nextGameInfo.gameNumber > gameNum) {
+        console.log(`\n🆕 New game #${nextGameInfo.gameNumber} detected!`);
+      }
+    }
+
+    // Calculate smart interval
+    return calculateInterval(status, currentInfo.timeUntilDraw, info.randomValue);
+
   } catch (err) {
     console.error(`❌ Error: ${err.message}`);
+    return INTERVALS.FAR_FROM_DRAW; // Back off on error
   }
 }
 
 // ---------------------------------------------------
-// Scheduling / Interval
+// Main Loop
 // ---------------------------------------------------
+console.log(`
+╔═══════════════════════════════════════════════════╗
+║         🥧 EAT THE PIE - LOTTERY BOT 🥧           ║
+║                 AUTONOMOUS MODE                    ║
+╚═══════════════════════════════════════════════════╝
+`);
 
-// Parse command line arguments
-// First arg (process.argv[2]) is the game number
-// Second arg (process.argv[3]) is the interval in minutes (optional)
-const gameNumber = parseInt(process.argv[2], 10);
-if (isNaN(gameNumber)) {
-  console.error("Please provide a valid game number as the first argument");
-  process.exit(1);
-}
-
-const argInterval = parseInt(process.argv[3], 10);
-const intervalMinutes = isNaN(argInterval) ? 1 : argInterval;
-const intervalMs = intervalMinutes * 60_000;
-
-console.log(
-  `\nLottery Bot started. Checking game #${gameNumber} every ${intervalMinutes} minute(s)...`
-);
+console.log("Bot is running autonomously. It will:");
+console.log("  • Auto-detect current game");
+console.log("  • Initiate draw when time is up");
+console.log("  • Complete the drawing process");
+console.log("  • Post results to social media");
+console.log("  • Move to next game automatically");
+console.log("\nInterval adjusts based on game state:");
+console.log(`  • Far from draw (>12h): ${INTERVALS.FAR_FROM_DRAW} min`);
+console.log(`  • Approaching (2-12h): ${INTERVALS.APPROACHING_DRAW} min`);
+console.log(`  • Close (30m-2h): ${INTERVALS.CLOSE_TO_DRAW} min`);
+console.log(`  • Very close (<30m): ${INTERVALS.VERY_CLOSE} min`);
+console.log(`  • Drawing in progress: ${INTERVALS.DRAWING_IN_PROGRESS} min`);
 
 async function mainLoop() {
   while (true) {
-    await checkGameFlow(gameNumber);
-    // Wait the specified interval before checking again
-    console.log(`Sleeping for ${intervalMinutes} minute(s)...`);
+    const intervalMinutes = await checkAndProcessGame();
+    const intervalMs = intervalMinutes * 60_000;
+
+    console.log(`\n💤 Next check in ${intervalMinutes} minute(s)...`);
+    console.log(`   (${new Date(Date.now() + intervalMs).toLocaleTimeString()})`);
+
     await setTimeout(intervalMs);
   }
 }
 
 mainLoop().catch((e) => {
-  console.error(`Fatal error in main loop: ${e.message}`);
+  console.error(`Fatal error: ${e.message}`);
   process.exit(1);
 });
