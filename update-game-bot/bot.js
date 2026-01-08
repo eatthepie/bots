@@ -421,41 +421,118 @@ async function checkAndProcessGame() {
 }
 
 // ---------------------------------------------------
+// Process a specific game to completion (one-shot)
+// ---------------------------------------------------
+async function processSpecificGame(gameNum) {
+  console.log(`\n🔧 Processing game #${gameNum} to completion...`);
+
+  while (true) {
+    const info = await getDetailedGameInfo(gameNum);
+    const status = info.status;
+    const statusName = ["InPlay", "Drawing", "Completed"][status];
+
+    console.log(`\n${"=".repeat(50)}`);
+    console.log(`📊 Game #${gameNum} | Status: ${statusName}`);
+
+    if (status === 0) {
+      console.log("Game is InPlay. Initiating draw...");
+      await initiateDraw();
+      console.log("Draw initiated. Waiting 30 seconds...");
+      await setTimeout(30000);
+    }
+    else if (status === 1) {
+      if (info.randomValue === 0n) {
+        console.log("🎲 Waiting for Witnet random number...");
+        try {
+          await setRandomAndWinningNumbers(gameNum);
+          console.log("Random set! Waiting 10 seconds...");
+          await setTimeout(10000);
+        } catch (err) {
+          if (err.message.includes("Random number not yet available")) {
+            console.log("   Random not ready yet. Waiting 30 seconds...");
+            await setTimeout(30000);
+          } else {
+            throw err;
+          }
+        }
+      } else {
+        console.log("🎯 Random received! Calculating payouts...");
+        await calculatePayouts(gameNum);
+        console.log("Payouts calculated. Waiting 10 seconds...");
+        await setTimeout(10000);
+      }
+    }
+    else if (status === 2) {
+      console.log(`\n✅ Game #${gameNum} is COMPLETED!`);
+      console.log(`   Winning numbers: ${info.winningNumbers.join(", ")}`);
+
+      // Send notification
+      try {
+        await notifyRoundComplete(gameNum);
+      } catch (err) {
+        console.error(`Failed to notify: ${err.message}`);
+      }
+
+      console.log("\nDone processing this game.");
+      process.exit(0);
+    }
+  }
+}
+
+// ---------------------------------------------------
 // Main Loop
 // ---------------------------------------------------
-console.log(`
+
+// Check for command line argument to process specific game
+const forceGameNumber = parseInt(process.argv[2], 10);
+if (!isNaN(forceGameNumber)) {
+  console.log(`
+╔═══════════════════════════════════════════════════╗
+║         🥧 EAT THE PIE - LOTTERY BOT 🥧           ║
+║              SINGLE GAME MODE                      ║
+╚═══════════════════════════════════════════════════╝
+`);
+  processSpecificGame(forceGameNumber).catch((e) => {
+    console.error(`Fatal error: ${e.message}`);
+    process.exit(1);
+  });
+} else {
+  console.log(`
 ╔═══════════════════════════════════════════════════╗
 ║         🥧 EAT THE PIE - LOTTERY BOT 🥧           ║
 ║                 AUTONOMOUS MODE                    ║
 ╚═══════════════════════════════════════════════════╝
 `);
 
-console.log("Bot is running autonomously. It will:");
-console.log("  • Auto-detect current game");
-console.log("  • Initiate draw when time is up");
-console.log("  • Complete the drawing process");
-console.log("  • Post results to social media");
-console.log("  • Move to next game automatically");
-console.log("\nInterval adjusts based on game state:");
-console.log(`  • Far from draw (>12h): ${INTERVALS.FAR_FROM_DRAW} min`);
-console.log(`  • Approaching (2-12h): ${INTERVALS.APPROACHING_DRAW} min`);
-console.log(`  • Close (30m-2h): ${INTERVALS.CLOSE_TO_DRAW} min`);
-console.log(`  • Very close (<30m): ${INTERVALS.VERY_CLOSE} min`);
-console.log(`  • Drawing in progress: ${INTERVALS.DRAWING_IN_PROGRESS} min`);
+  console.log("Bot is running autonomously. It will:");
+  console.log("  • Auto-detect current game");
+  console.log("  • Initiate draw when time is up");
+  console.log("  • Complete the drawing process");
+  console.log("  • Post results to social media");
+  console.log("  • Move to next game automatically");
+  console.log("\nInterval adjusts based on game state:");
+  console.log(`  • Far from draw (>12h): ${INTERVALS.FAR_FROM_DRAW} min`);
+  console.log(`  • Approaching (2-12h): ${INTERVALS.APPROACHING_DRAW} min`);
+  console.log(`  • Close (30m-2h): ${INTERVALS.CLOSE_TO_DRAW} min`);
+  console.log(`  • Very close (<30m): ${INTERVALS.VERY_CLOSE} min`);
+  console.log(`  • Drawing in progress: ${INTERVALS.DRAWING_IN_PROGRESS} min`);
+  console.log("\nTip: Run with a game number to process a specific game:");
+  console.log("     node bot.js 95");
 
-async function mainLoop() {
-  while (true) {
-    const intervalMinutes = await checkAndProcessGame();
-    const intervalMs = intervalMinutes * 60_000;
+  async function mainLoop() {
+    while (true) {
+      const intervalMinutes = await checkAndProcessGame();
+      const intervalMs = intervalMinutes * 60_000;
 
-    console.log(`\n💤 Next check in ${intervalMinutes} minute(s)...`);
-    console.log(`   (${new Date(Date.now() + intervalMs).toLocaleTimeString()})`);
+      console.log(`\n💤 Next check in ${intervalMinutes} minute(s)...`);
+      console.log(`   (${new Date(Date.now() + intervalMs).toLocaleTimeString()})`);
 
-    await setTimeout(intervalMs);
+      await setTimeout(intervalMs);
+    }
   }
-}
 
-mainLoop().catch((e) => {
-  console.error(`Fatal error: ${e.message}`);
-  process.exit(1);
-});
+  mainLoop().catch((e) => {
+    console.error(`Fatal error: ${e.message}`);
+    process.exit(1);
+  });
+}
