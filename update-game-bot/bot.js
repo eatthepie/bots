@@ -276,14 +276,73 @@ function formatTime(seconds) {
 // ---------------------------------------------------
 const notifiedGames = new Set();
 
+// Track the game we're currently processing (to not lose track after initiateDraw)
+let activeDrawingGame = null;
+
 // ---------------------------------------------------
 // Main Flow: Autonomous Game Management
 // ---------------------------------------------------
 async function checkAndProcessGame() {
   try {
-    // Get current game info
+    // Get current game info from contract
     const currentInfo = await getCurrentGameInfo();
-    const gameNum = currentInfo.gameNumber;
+
+    // If we have an active drawing game, keep processing it until completed
+    // (After initiateDraw, getCurrentGameInfo returns the NEXT game, not the drawing one)
+    let gameNum = currentInfo.gameNumber;
+
+    if (activeDrawingGame !== null) {
+      // Check if our active drawing game is still in progress
+      const activeGameInfo = await getDetailedGameInfo(activeDrawingGame);
+      if (activeGameInfo.status !== 2) {
+        // Still drawing, keep working on it
+        gameNum = activeDrawingGame;
+        console.log(`\n${"=".repeat(50)}`);
+        console.log(`📊 Game #${gameNum} | Status: ${["InPlay", "Drawing", "Completed"][activeGameInfo.status]} (active draw)`);
+
+        const info = activeGameInfo;
+        const status = info.status;
+
+        if (status === 1) {
+          // Drawing
+          if (info.randomValue === 0n) {
+            console.log("🎲 Waiting for Witnet random number...");
+            try {
+              await setRandomAndWinningNumbers(gameNum);
+            } catch (err) {
+              if (err.message.includes("Random number not yet available")) {
+                console.log("   Random not ready yet, will retry...");
+              } else {
+                throw err;
+              }
+            }
+            return INTERVALS.WAITING_FOR_RANDOM;
+          } else {
+            console.log("🎯 Random received! Calculating payouts...");
+            await calculatePayouts(gameNum);
+            return INTERVALS.DRAWING_IN_PROGRESS;
+          }
+        }
+
+        // Shouldn't get here normally (status 0 with activeDrawingGame set)
+        return INTERVALS.DRAWING_IN_PROGRESS;
+      } else {
+        // Game completed, send notification and clear active game
+        if (!notifiedGames.has(activeDrawingGame)) {
+          console.log(`\n✅ Game #${activeDrawingGame} completed! Sending social media notification...`);
+          await setTimeout(3000);
+          try {
+            await notifyRoundComplete(activeDrawingGame);
+            notifiedGames.add(activeDrawingGame);
+          } catch (err) {
+            console.error(`Failed to notify: ${err.message}`);
+          }
+        }
+        console.log(`\n🆕 Moving to game #${currentInfo.gameNumber}`);
+        activeDrawingGame = null;
+        // Continue to process the current game below
+      }
+    }
 
     // Get detailed info for current game
     const info = await getDetailedGameInfo(gameNum);
@@ -304,13 +363,16 @@ async function checkAndProcessGame() {
       if (currentInfo.timeUntilDraw <= 0) {
         console.log("⏰ Draw time reached! Initiating draw...");
         await initiateDraw();
+        // Remember this game so we complete its draw process
+        activeDrawingGame = gameNum;
         return INTERVALS.DRAWING_IN_PROGRESS;
       } else {
         console.log("⏳ Waiting for draw time...");
       }
     }
     else if (status === 1) {
-      // Drawing
+      // Drawing (can happen if bot restarts mid-draw)
+      activeDrawingGame = gameNum;
       if (info.randomValue === 0n) {
         console.log("🎲 Waiting for Witnet random number...");
         try {
