@@ -310,7 +310,10 @@ async function checkAndProcessGame() {
             try {
               await setRandomAndWinningNumbers(gameNum);
             } catch (err) {
-              if (err.message.includes("Random number not yet available")) {
+              if (
+                err.message.includes("Random number not yet available") ||
+                err.message.includes("pending randomize")
+              ) {
                 console.log("   Random not ready yet, will retry...");
               } else {
                 throw err;
@@ -378,7 +381,10 @@ async function checkAndProcessGame() {
         try {
           await setRandomAndWinningNumbers(gameNum);
         } catch (err) {
-          if (err.message.includes("Random number not yet available")) {
+          if (
+            err.message.includes("Random number not yet available") ||
+            err.message.includes("pending randomize")
+          ) {
             console.log("   Random not ready yet, will retry...");
           } else {
             throw err;
@@ -448,7 +454,10 @@ async function processSpecificGame(gameNum) {
           console.log("Random set! Waiting 10 seconds...");
           await setTimeout(10000);
         } catch (err) {
-          if (err.message.includes("Random number not yet available")) {
+          if (
+            err.message.includes("Random number not yet available") ||
+            err.message.includes("pending randomize")
+          ) {
             console.log("   Random not ready yet. Waiting 30 seconds...");
             await setTimeout(30000);
           } else {
